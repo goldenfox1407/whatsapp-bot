@@ -14,6 +14,11 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+// ─── Root Redirect to WhatsApp Manager ────────────────────────────
+app.get("/", (_req, res) => {
+  res.redirect("/api/whatsapp");
+});
+
 // ─── Health Check (used by keep-alive & Render) ──────────────────
 app.get("/api/health", (_req, res) => {
   const mem = process.memoryUsage();
