@@ -102,32 +102,40 @@ app.post("/api/whatsapp/kill", (_req, res) => {
   setTimeout(() => process.exit(0), 500);
 });
 
-// ─── Backward Compatibility (Laravel calls /send directly) ───────
-// The old Replit bot had routes at /send, Laravel uses {url}/send
-// This ensures zero changes needed in MessagingGatewayService.php
-app.post("/send", async (req, res) => {
-  if (!state.isReady) {
-    return res.status(503).json({ error: "WhatsApp Client is not ready" });
-  }
-  const { number, message, mediaUrl } = req.body;
-  if (!number || !message) {
-    return res.status(400).json({ error: "Number and message are required" });
-  }
+// ─── Backward Compatibility Routes (Laravel WhatsAppManagerController) ─
+// Laravel calls root URLs: {nodeUrl}/qr, {nodeUrl}/status, {nodeUrl}/reinit, {nodeUrl}/logout, {nodeUrl}/kill
+app.get("/qr", (_req, res) => {
+  res.json({
+    status: state.clientStatus,
+    qr: state.currentQr,
+  });
+});
+
+app.get("/status", (_req, res) => {
+  res.json({ status: state.isReady ? "connected" : "disconnected" });
+});
+
+app.post("/reinit", async (_req, res) => {
   try {
-    let jid = number.replace("+", "");
-    if (!jid.includes("@")) {
-      jid = `${jid}@s.whatsapp.net`;
-    }
-    if (mediaUrl) {
-      await sendMediaFromUrl(jid, message, mediaUrl);
-    } else {
-      await sendMessage(jid, message);
-    }
-    res.json({ success: true, message: "Message sent successfully" });
+    reinitialize();
+    res.json({ success: true, message: "WhatsApp client restarting" });
   } catch (err) {
-    console.error("Error sending message:", err.message);
-    res.status(500).json({ error: "Failed to send message", details: err.message });
+    res.status(500).json({ error: "Failed to reinitialize", details: err.message });
   }
+});
+
+app.post("/logout", async (_req, res) => {
+  try {
+    await logout();
+    res.json({ success: true, message: "Logged out successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to logout", details: err.message });
+  }
+});
+
+app.post("/kill", (_req, res) => {
+  res.json({ success: true, message: "Process terminating" });
+  setTimeout(() => process.exit(0), 500);
 });
 
 // ─── WhatsApp Manager UI ─────────────────────────────────────────
