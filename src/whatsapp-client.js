@@ -26,6 +26,8 @@ export const state = {
 
 let activeSock = null;
 let reconnectTimer = null;
+const messageStore = new Map(); // key.id -> message (for answering Signal retry receipts to prevent 'waiting for this message')
+const processedMsgIds = new Set(); // deduplication of incoming messages
 
 // ─── Create & Start WhatsApp Connection ──────────────────────────
 async function startBot() {
@@ -44,6 +46,10 @@ async function startBot() {
     auth: {
       creds: authState.creds,
       keys: makeCacheableSignalKeyStore(authState.keys, logger),
+    },
+    getMessage: async (key) => {
+      const msg = messageStore.get(key.id);
+      return msg || undefined;
     },
     logger: pino({ level: "silent" }),
     generateHighQualityLinkPreview: false,
@@ -103,9 +109,33 @@ async function startBot() {
     if (type !== "notify") return;
 
     for (const msg of messages) {
-      // Skip status broadcasts and own messages
+      const msgId = msg.key?.id;
+
+      // Store message in cache for answering Signal retry receipts (both incoming and outgoing)
+      if (msgId && msg.message) {
+        messageStore.set(msgId, msg.message);
+        if (messageStore.size > 3000) {
+          const oldest = messageStore.keys().next().value;
+          messageStore.delete(oldest);
+        }
+      }
+
+      // Skip status broadcasts and own messages for webhook forwarding
       if (msg.key.remoteJid === "status@broadcast") continue;
       if (msg.key.fromMe) continue;
+
+      // Deduplicate: do not forward the same incoming message multiple times
+      if (msgId && processedMsgIds.has(msgId)) {
+        logger.info({ msgId }, "Skipping duplicate message upsert");
+        continue;
+      }
+      if (msgId) {
+        processedMsgIds.add(msgId);
+        if (processedMsgIds.size > 3000) {
+          const oldest = processedMsgIds.values().next().value;
+          processedMsgIds.delete(oldest);
+        }
+      }
 
       const from = msg.key.remoteJid;
       const body =
@@ -121,7 +151,7 @@ async function startBot() {
       const hasMedia = hasImage || hasVideo || hasDocument;
 
       logger.info(
-        { from, hasMedia, body: body.substring(0, 80) },
+        { msgId, from, hasMedia, body: body.substring(0, 80) },
         "📩 Incoming message"
       );
 
@@ -175,6 +205,7 @@ async function startBot() {
         await axios.post(
           LARAVEL_WEBHOOK_URL,
           {
+            id: msgId,
             from,
             to: msg.key.participant || from,
             body,
@@ -219,7 +250,15 @@ export async function sendMessage(jid, text) {
   if (!activeSock || !state.isReady) {
     throw new Error("WhatsApp not connected");
   }
-  await activeSock.sendMessage(jid, { text });
+  const sent = await activeSock.sendMessage(jid, { text });
+  if (sent?.key?.id && sent?.message) {
+    messageStore.set(sent.key.id, sent.message);
+    if (messageStore.size > 3000) {
+      const oldest = messageStore.keys().next().value;
+      messageStore.delete(oldest);
+    }
+  }
+  return sent;
 }
 
 /** Send a message with an image from URL */
@@ -231,10 +270,18 @@ export async function sendMediaFromUrl(jid, text, mediaUrl) {
     responseType: "arraybuffer",
   });
   const buffer = Buffer.from(response.data);
-  await activeSock.sendMessage(jid, {
+  const sent = await activeSock.sendMessage(jid, {
     image: buffer,
     caption: text,
   });
+  if (sent?.key?.id && sent?.message) {
+    messageStore.set(sent.key.id, sent.message);
+    if (messageStore.size > 3000) {
+      const oldest = messageStore.keys().next().value;
+      messageStore.delete(oldest);
+    }
+  }
+  return sent;
 }
 
 /** Reinitialize (force reconnect) */
