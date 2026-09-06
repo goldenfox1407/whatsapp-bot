@@ -124,7 +124,43 @@ async function startBot() {
       if (msg.key.remoteJid === "status@broadcast") continue;
       if (msg.key.fromMe) continue;
 
-      // Deduplicate: do not forward the same incoming message multiple times
+      // Unwrap any nested message layers (ephemeralMessage, viewOnceMessage, etc.)
+      let messageContent = msg.message;
+      while (
+        messageContent?.ephemeralMessage?.message ||
+        messageContent?.viewOnceMessage?.message ||
+        messageContent?.viewOnceMessageV2?.message ||
+        messageContent?.documentWithCaptionMessage?.message
+      ) {
+        messageContent =
+          messageContent?.ephemeralMessage?.message ||
+          messageContent?.viewOnceMessage?.message ||
+          messageContent?.viewOnceMessageV2?.message ||
+          messageContent?.documentWithCaptionMessage?.message;
+      }
+
+      const from = msg.key.remoteJid;
+      const body =
+        messageContent?.conversation ||
+        messageContent?.extendedTextMessage?.text ||
+        messageContent?.imageMessage?.caption ||
+        messageContent?.videoMessage?.caption ||
+        "";
+
+      const hasImage = !!messageContent?.imageMessage;
+      const hasVideo = !!messageContent?.videoMessage;
+      const hasDocument = !!messageContent?.documentMessage;
+      const hasMedia = hasImage || hasVideo || hasDocument;
+
+      // CRITICAL: If message has no body and no media, it is an undecrypted envelope, typing notification, or stub.
+      // NEVER forward empty messages to Laravel, and NEVER mark msgId in processedMsgIds!
+      // This allows the full decrypted message to be processed when Baileys receives it.
+      if (!body.trim() && !hasMedia) {
+        logger.info({ msgId }, "Ignoring empty/stub/pending-decryption message upsert");
+        continue;
+      }
+
+      // Deduplicate: do not forward the same incoming message with content multiple times
       if (msgId && processedMsgIds.has(msgId)) {
         logger.info({ msgId }, "Skipping duplicate message upsert");
         continue;
@@ -137,19 +173,6 @@ async function startBot() {
         }
       }
 
-      const from = msg.key.remoteJid;
-      const body =
-        msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.imageMessage?.caption ||
-        msg.message?.videoMessage?.caption ||
-        "";
-
-      const hasImage = !!msg.message?.imageMessage;
-      const hasVideo = !!msg.message?.videoMessage;
-      const hasDocument = !!msg.message?.documentMessage;
-      const hasMedia = hasImage || hasVideo || hasDocument;
-
       logger.info(
         { msgId, from, hasMedia, body: body.substring(0, 80) },
         "📩 Incoming message"
@@ -161,7 +184,7 @@ async function startBot() {
         try {
           logger.info({ from }, "Downloading media...");
           const buffer = await downloadMediaMessage(
-            msg,
+            { key: msg.key, message: messageContent },
             "buffer",
             {},
             {
@@ -171,9 +194,9 @@ async function startBot() {
           );
 
           const mimetype =
-            msg.message?.imageMessage?.mimetype ||
-            msg.message?.videoMessage?.mimetype ||
-            msg.message?.documentMessage?.mimetype ||
+            messageContent?.imageMessage?.mimetype ||
+            messageContent?.videoMessage?.mimetype ||
+            messageContent?.documentMessage?.mimetype ||
             "application/octet-stream";
 
           const sizeInMB = buffer.length / (1024 * 1024);
@@ -189,7 +212,7 @@ async function startBot() {
               mimetype,
               data: buffer.toString("base64"),
               filename:
-                msg.message?.documentMessage?.fileName || null,
+                messageContent?.documentMessage?.fileName || null,
             };
           }
         } catch (err) {
