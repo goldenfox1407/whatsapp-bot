@@ -30,6 +30,8 @@ app.get("/api/health", (_req, res) => {
     memoryMB: Math.round(mem.rss / 1024 / 1024),
     engine: "baileys",
     botUser: getBotUser(),
+    waVersion: state.currentWaVersion,
+    appVersion: "1.2.0-live",
   });
 });
 
@@ -58,7 +60,9 @@ app.post("/api/whatsapp/reinit", async (_req, res) => {
 
 // ─── Send Message (called by Laravel) ────────────────────────────
 app.post("/api/whatsapp/send", async (req, res) => {
+  const t0 = Date.now();
   if (!state.isReady) {
+    console.warn("[SEND REJECTED] WhatsApp Client is not ready");
     return res.status(503).json({ error: "WhatsApp Client is not ready" });
   }
 
@@ -70,6 +74,7 @@ app.post("/api/whatsapp/send", async (req, res) => {
 
   const cleanDigits = String(number).replace(/[^0-9]/g, "");
   if (cleanDigits.length < 9) {
+    console.warn(`[SEND REJECTED] Invalid phone number too short: ${number}`);
     return res.status(400).json({ error: "Invalid phone number: too short" });
   }
 
@@ -80,15 +85,23 @@ app.post("/api/whatsapp/send", async (req, res) => {
       jid = `${jid}@s.whatsapp.net`;
     }
 
+    console.log(`[SEND START] To: ${jid} (${message.length} chars, media: ${!!mediaUrl})`);
+
+    let sentResult;
     if (mediaUrl) {
-      await sendMediaFromUrl(jid, message, mediaUrl);
+      sentResult = await sendMediaFromUrl(jid, message, mediaUrl);
     } else {
-      await sendMessage(jid, message);
+      sentResult = await sendMessage(jid, message);
     }
 
-    res.json({ success: true, message: "Message sent successfully" });
+    const duration = Date.now() - t0;
+    const msgId = sentResult?.key?.id || "N/A";
+    console.log(`[SEND SUCCESS] To: ${jid} in ${duration}ms (msgId: ${msgId})`);
+
+    res.json({ success: true, message: "Message sent successfully", msgId, durationMs: duration });
   } catch (err) {
-    console.error("Error sending message:", err.message);
+    const duration = Date.now() - t0;
+    console.error(`[SEND ERROR] To: ${number} after ${duration}ms:`, err.message);
     res.status(500).json({ error: "Failed to send message", details: err.message });
   }
 });

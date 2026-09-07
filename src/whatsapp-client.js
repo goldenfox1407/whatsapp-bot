@@ -2,7 +2,9 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestWaWebVersion,
   fetchLatestBaileysVersion,
+  Browsers,
   makeCacheableSignalKeyStore,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
@@ -22,6 +24,7 @@ export const state = {
   isReady: false,
   currentQr: null,
   clientStatus: "starting", // starting | waiting_qr | connected | disconnected
+  currentWaVersion: null,
 };
 
 let activeSock = null;
@@ -42,11 +45,26 @@ async function startBot() {
   const { state: authState, saveCreds } =
     await useMultiFileAuthState("auth_info");
 
-  const { version } = await fetchLatestBaileysVersion();
-  logger.info({ version }, "Using WA version");
+  let version = [2, 3000, 1046941822];
+  try {
+    const waVer = await fetchLatestWaWebVersion();
+    if (waVer?.version) {
+      version = waVer.version;
+      logger.info({ version, isLatest: waVer.isLatest }, "Using official WA Web version");
+    }
+  } catch (err) {
+    try {
+      const bVer = await fetchLatestBaileysVersion();
+      version = bVer.version;
+      logger.warn({ version, err: err.message }, "Fallback to Baileys version");
+    } catch {}
+  }
+  state.currentWaVersion = version;
 
   const sock = makeWASocket({
     version,
+    browser: Browsers.macOS("Desktop"),
+    syncFullHistory: false,
     auth: {
       creds: authState.creds,
       keys: makeCacheableSignalKeyStore(authState.keys, logger),
@@ -55,9 +73,9 @@ async function startBot() {
       const msg = messageStore.get(key.id);
       return msg || undefined;
     },
-    logger: pino({ level: "silent" }),
+    logger: pino({ level: process.env.LOG_LEVEL === "debug" ? "debug" : "warn" }),
     generateHighQualityLinkPreview: false,
-    defaultQueryTimeoutMs: undefined,
+    defaultQueryTimeoutMs: 60000,
   });
 
   activeSock = sock;
@@ -101,10 +119,22 @@ async function startBot() {
     }
 
     if (connection === "open") {
-      logger.info("✅ WhatsApp connected and ready");
+      logger.info({ user: sock.user }, "✅ WhatsApp connected and ready");
       state.isReady = true;
       state.currentQr = null;
       state.clientStatus = "connected";
+    }
+  });
+
+  // ─── Message status updates (ACKs: delivery, read) ───────────
+  sock.ev.on("messages.update", (updates) => {
+    for (const update of updates) {
+      if (update.update?.status) {
+        logger.info(
+          { keyId: update.key?.id, remoteJid: update.key?.remoteJid, status: update.update.status },
+          "📊 Message status update (ack)"
+        );
+      }
     }
   });
 
@@ -277,7 +307,9 @@ export async function sendMessage(jid, text) {
   if (!activeSock || !state.isReady) {
     throw new Error("WhatsApp not connected");
   }
+  logger.info({ jid, length: text?.length }, "📤 Baileys sending text message");
   const sent = await activeSock.sendMessage(jid, { text });
+  logger.info({ jid, msgId: sent?.key?.id, status: sent?.status }, "✅ Dispatched to WhatsApp socket");
   if (sent?.key?.id && sent?.message) {
     messageStore.set(sent.key.id, sent.message);
     if (messageStore.size > 3000) {
@@ -293,6 +325,7 @@ export async function sendMediaFromUrl(jid, text, mediaUrl) {
   if (!activeSock || !state.isReady) {
     throw new Error("WhatsApp not connected");
   }
+  logger.info({ jid, mediaUrl }, "📤 Baileys sending media message");
   const response = await axios.get(mediaUrl, {
     responseType: "arraybuffer",
   });
@@ -301,6 +334,7 @@ export async function sendMediaFromUrl(jid, text, mediaUrl) {
     image: buffer,
     caption: text,
   });
+  logger.info({ jid, msgId: sent?.key?.id, status: sent?.status }, "✅ Media dispatched to WhatsApp socket");
   if (sent?.key?.id && sent?.message) {
     messageStore.set(sent.key.id, sent.message);
     if (messageStore.size > 3000) {
