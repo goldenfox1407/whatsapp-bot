@@ -8,6 +8,8 @@ import {
   logout,
   initializeWhatsApp,
   getBotUser,
+  checkNumberOnWhatsApp,
+  sendMessageWithAckWait,
 } from "./whatsapp-client.js";
 
 const app = express();
@@ -103,6 +105,65 @@ app.post("/api/whatsapp/send", async (req, res) => {
     const duration = Date.now() - t0;
     console.error(`[SEND ERROR] To: ${number} after ${duration}ms:`, err.message);
     res.status(500).json({ error: "Failed to send message", details: err.message });
+  }
+});
+
+// ─── Check Number on WhatsApp (diagnostic) ──────────────────────
+app.post("/api/whatsapp/check-number", async (req, res) => {
+  try {
+    const { number } = req.body;
+    if (!number) return res.status(400).json({ error: "number is required" });
+    const results = await checkNumberOnWhatsApp(number);
+    res.json({ success: true, number, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Debug Send with ACK Wait (diagnostic) ──────────────────────
+app.post("/api/whatsapp/debug-send", async (req, res) => {
+  const t0 = Date.now();
+  try {
+    const { number, message } = req.body;
+    if (!number || !message) return res.status(400).json({ error: "number and message required" });
+
+    let jid = String(number).replace("+", "");
+    if (!jid.includes("@")) jid = `${jid}@s.whatsapp.net`;
+
+    console.log(`[DEBUG-SEND] To: ${jid}`);
+
+    // First check if number is on WhatsApp
+    let waCheck = null;
+    try {
+      waCheck = await checkNumberOnWhatsApp(number);
+      console.log(`[DEBUG-SEND] onWhatsApp result:`, JSON.stringify(waCheck));
+      // If onWhatsApp returns a different JID, use it
+      if (waCheck && waCheck.length > 0 && waCheck[0].jid) {
+        jid = waCheck[0].jid;
+        console.log(`[DEBUG-SEND] Using resolved JID: ${jid}`);
+      }
+    } catch (e) {
+      console.warn(`[DEBUG-SEND] onWhatsApp check failed: ${e.message}`);
+    }
+
+    const result = await sendMessageWithAckWait(jid, message);
+    const duration = Date.now() - t0;
+    const msgId = result.sent?.key?.id || "N/A";
+
+    console.log(`[DEBUG-SEND] Complete in ${duration}ms. MsgId: ${msgId}, ACK: ${JSON.stringify(result.ackResult)}`);
+
+    res.json({
+      success: true,
+      jidUsed: jid,
+      waCheck,
+      msgId,
+      ackResult: result.ackResult,
+      durationMs: duration,
+    });
+  } catch (err) {
+    const duration = Date.now() - t0;
+    console.error(`[DEBUG-SEND ERROR] ${err.message} after ${duration}ms`);
+    res.status(500).json({ error: err.message, durationMs: duration });
   }
 });
 

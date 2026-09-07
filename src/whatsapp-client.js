@@ -389,3 +389,63 @@ export function initializeWhatsApp() {
 
   startBot();
 }
+
+/** Check if a number is registered on WhatsApp and get its JID */
+export async function checkNumberOnWhatsApp(number) {
+  if (!activeSock || !state.isReady) {
+    throw new Error("WhatsApp not connected");
+  }
+  const cleanNumber = number.replace(/[^0-9]/g, "");
+  const results = await activeSock.onWhatsApp(cleanNumber);
+  logger.info({ number: cleanNumber, results }, "🔍 onWhatsApp check");
+  return results;
+}
+
+/** Send with ACK tracking — waits up to 10s for server acknowledgement */
+export async function sendMessageWithAckWait(jid, text) {
+  if (!activeSock || !state.isReady) {
+    throw new Error("WhatsApp not connected");
+  }
+
+  logger.info({ jid, length: text?.length }, "📤 Sending with ACK wait");
+
+  const sent = await activeSock.sendMessage(jid, { text });
+  const sentMsgId = sent?.key?.id;
+
+  logger.info(
+    { jid, msgId: sentMsgId, sentKey: sent?.key, status: sent?.status },
+    "📨 Message dispatched, waiting for server ACK..."
+  );
+
+  if (sent?.key?.id && sent?.message) {
+    messageStore.set(sent.key.id, sent.message);
+  }
+
+  // Wait for server ACK (messages.update event with status >= 2)
+  const ackResult = await new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      activeSock.ev.off("messages.update", handler);
+      resolve({ acked: false, reason: "timeout_10s" });
+    }, 10000);
+
+    function handler(updates) {
+      for (const update of updates) {
+        if (update.key?.id === sentMsgId && update.update?.status) {
+          clearTimeout(timeout);
+          activeSock.ev.off("messages.update", handler);
+          resolve({ acked: true, status: update.update.status, statusName: getStatusName(update.update.status) });
+          return;
+        }
+      }
+    }
+    activeSock.ev.on("messages.update", handler);
+  });
+
+  logger.info({ jid, msgId: sentMsgId, ackResult }, "📊 ACK result");
+  return { sent, ackResult };
+}
+
+function getStatusName(status) {
+  const names = { 0: "ERROR", 1: "PENDING", 2: "SERVER_ACK", 3: "DELIVERY_ACK", 4: "READ", 5: "PLAYED" };
+  return names[status] || `UNKNOWN(${status})`;
+}
