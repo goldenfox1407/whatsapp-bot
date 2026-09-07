@@ -66,6 +66,11 @@ app.post("/api/whatsapp/send", async (req, res) => {
     return res.status(400).json({ error: "Number and message are required" });
   }
 
+  const cleanDigits = String(number).replace(/[^0-9]/g, "");
+  if (cleanDigits.length < 9) {
+    return res.status(400).json({ error: "Invalid phone number: too short" });
+  }
+
   try {
     // Format: 212660581249 → 212660581249@s.whatsapp.net
     let jid = number.replace("+", "");
