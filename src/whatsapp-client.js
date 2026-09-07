@@ -65,6 +65,7 @@ async function startBot() {
     version,
     browser: Browsers.macOS("Desktop"),
     syncFullHistory: false,
+    markOnlineOnConnect: true,
     auth: {
       creds: authState.creds,
       keys: makeCacheableSignalKeyStore(authState.keys, logger),
@@ -123,6 +124,14 @@ async function startBot() {
       state.isReady = true;
       state.currentQr = null;
       state.clientStatus = "connected";
+
+      // Mark as available/online — critical for outbound delivery
+      try {
+        await sock.sendPresenceUpdate("available");
+        logger.info("🟢 Presence set to 'available'");
+      } catch (e) {
+        logger.warn({ err: e.message }, "Failed to set presence");
+      }
     }
   });
 
@@ -308,6 +317,21 @@ export async function sendMessage(jid, text) {
     throw new Error("WhatsApp not connected");
   }
   logger.info({ jid, length: text?.length }, "📤 Baileys sending text message");
+
+  // Ensure we appear online and subscribe to the recipient's presence
+  try {
+    await activeSock.sendPresenceUpdate("available");
+    if (jid.endsWith("@s.whatsapp.net")) {
+      await activeSock.presenceSubscribe(jid);
+      await new Promise(r => setTimeout(r, 200));
+      await activeSock.sendPresenceUpdate("composing", jid);
+      await new Promise(r => setTimeout(r, 300));
+      await activeSock.sendPresenceUpdate("paused", jid);
+    }
+  } catch (e) {
+    logger.warn({ err: e.message }, "Presence setup warning (non-fatal)");
+  }
+
   const sent = await activeSock.sendMessage(jid, { text });
   logger.info({ jid, msgId: sent?.key?.id, status: sent?.status }, "✅ Dispatched to WhatsApp socket");
   if (sent?.key?.id && sent?.message) {
