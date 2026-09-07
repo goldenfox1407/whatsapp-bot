@@ -29,6 +29,10 @@ let reconnectTimer = null;
 const messageStore = new Map(); // key.id -> message (for answering Signal retry receipts to prevent 'waiting for this message')
 const processedMsgIds = new Set(); // deduplication of incoming messages
 
+export function getBotUser() {
+  return activeSock?.user || null;
+}
+
 // ─── Create & Start WhatsApp Connection ──────────────────────────
 async function startBot() {
   state.clientStatus = "starting";

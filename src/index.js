@@ -7,6 +7,7 @@ import {
   reinitialize,
   logout,
   initializeWhatsApp,
+  getBotUser,
 } from "./whatsapp-client.js";
 
 const app = express();
@@ -28,6 +29,7 @@ app.get("/api/health", (_req, res) => {
     uptime: process.uptime(),
     memoryMB: Math.round(mem.rss / 1024 / 1024),
     engine: "baileys",
+    botUser: getBotUser(),
   });
 });
 
