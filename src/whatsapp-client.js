@@ -337,7 +337,7 @@ export async function sendMessage(jid, text) {
   // Step 1: Assert Signal session exists (prevents 'waiting for this message')
   if (jid.endsWith("@s.whatsapp.net")) {
     try {
-      await activeSock.assertSessions([jid], false);
+      await activeSock.assertSessions([jid], true);
       logger.info({ jid }, "🔑 Signal session asserted");
     } catch (e) {
       logger.warn({ jid, err: e.message }, "assertSessions warning (non-fatal)");
