@@ -10,6 +10,7 @@ import {
   getBotUser,
   checkNumberOnWhatsApp,
   sendMessageWithAckWait,
+  relaySendMessage,
 } from "./whatsapp-client.js";
 
 const app = express();
@@ -163,6 +164,30 @@ app.post("/api/whatsapp/debug-send", async (req, res) => {
   } catch (err) {
     const duration = Date.now() - t0;
     console.error(`[DEBUG-SEND ERROR] ${err.message} after ${duration}ms`);
+    res.status(500).json({ error: err.message, durationMs: duration });
+  }
+});
+
+// ─── Relay Send (low-level alternative) ─────────────────────────
+app.post("/api/whatsapp/relay-send", async (req, res) => {
+  const t0 = Date.now();
+  try {
+    const { number, message } = req.body;
+    if (!number || !message) return res.status(400).json({ error: "number and message required" });
+
+    let jid = String(number).replace("+", "");
+    if (!jid.includes("@")) jid = `${jid}@s.whatsapp.net`;
+
+    console.log(`[RELAY-SEND] To: ${jid}`);
+    const result = await relaySendMessage(jid, message);
+    const duration = Date.now() - t0;
+    const msgId = result?.key?.id || "N/A";
+    console.log(`[RELAY-SEND] Done in ${duration}ms. MsgId: ${msgId}`);
+
+    res.json({ success: true, method: "relay", jid, msgId, durationMs: duration });
+  } catch (err) {
+    const duration = Date.now() - t0;
+    console.error(`[RELAY-SEND ERROR] ${err.message} after ${duration}ms`);
     res.status(500).json({ error: err.message, durationMs: duration });
   }
 });

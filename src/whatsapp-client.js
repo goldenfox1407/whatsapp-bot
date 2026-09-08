@@ -6,6 +6,8 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   Browsers,
   makeCacheableSignalKeyStore,
+  generateWAMessage,
+  getContentType,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -472,4 +474,36 @@ export async function sendMessageWithAckWait(jid, text) {
 function getStatusName(status) {
   const names = { 0: "ERROR", 1: "PENDING", 2: "SERVER_ACK", 3: "DELIVERY_ACK", 4: "READ", 5: "PLAYED" };
   return names[status] || `UNKNOWN(${status})`;
+}
+
+/** Send using low-level relay (generateWAMessage + relayMessage) */
+export async function relaySendMessage(jid, text) {
+  if (!activeSock || !state.isReady) {
+    throw new Error("WhatsApp not connected");
+  }
+  logger.info({ jid }, "📤 Relay send method");
+
+  // Generate the full WAMessage object
+  const msg = await generateWAMessage(jid, { text }, {
+    userJid: activeSock.user?.id,
+    logger,
+  });
+
+  logger.info({ jid, msgId: msg.key?.id }, "Generated WAMessage, now relaying...");
+
+  // Relay the message (low-level send)
+  await activeSock.relayMessage(jid, msg.message, { messageId: msg.key.id });
+
+  // Cache for retry
+  if (msg.key?.id && msg.message) {
+    messageStore.set(msg.key.id, msg.message);
+  }
+
+  logger.info({ jid, msgId: msg.key?.id }, "✅ Relayed to WhatsApp");
+  return msg;
+}
+
+/** Get the active socket (for advanced operations in index.js) */
+export function getActiveSock() {
+  return activeSock;
 }
