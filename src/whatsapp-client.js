@@ -134,6 +134,20 @@ async function startBot() {
       } catch (e) {
         logger.warn({ err: e.message }, "Failed to set presence");
       }
+
+      // Pre-establish Signal sessions with known contacts
+      // This prevents the 'waiting for this message' error on first send
+      setTimeout(async () => {
+        const knownJids = (process.env.KNOWN_JIDS || "").split(",").map(j => j.trim()).filter(Boolean);
+        if (knownJids.length > 0) {
+          try {
+            await sock.assertSessions(knownJids, false);
+            logger.info({ jids: knownJids }, "🔑 Signal sessions pre-established for known contacts");
+          } catch (e) {
+            logger.warn({ err: e.message }, "Failed to pre-establish Signal sessions (non-fatal)");
+          }
+        }
+      }, 3000);
     }
   });
 
@@ -320,20 +334,31 @@ export async function sendMessage(jid, text) {
   }
   logger.info({ jid, length: text?.length }, "📤 Baileys sending text message");
 
-  // Ensure we appear online and subscribe to the recipient's presence
+  // Step 1: Assert Signal session exists (prevents 'waiting for this message')
+  if (jid.endsWith("@s.whatsapp.net")) {
+    try {
+      await activeSock.assertSessions([jid], false);
+      logger.info({ jid }, "🔑 Signal session asserted");
+    } catch (e) {
+      logger.warn({ jid, err: e.message }, "assertSessions warning (non-fatal)");
+    }
+  }
+
+  // Step 2: Presence — appear as active/composing to the recipient
   try {
     await activeSock.sendPresenceUpdate("available");
     if (jid.endsWith("@s.whatsapp.net")) {
       await activeSock.presenceSubscribe(jid);
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 150));
       await activeSock.sendPresenceUpdate("composing", jid);
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 250));
       await activeSock.sendPresenceUpdate("paused", jid);
     }
   } catch (e) {
     logger.warn({ err: e.message }, "Presence setup warning (non-fatal)");
   }
 
+  // Step 3: Send
   const sent = await activeSock.sendMessage(jid, { text });
   logger.info({ jid, msgId: sent?.key?.id, status: sent?.status }, "✅ Dispatched to WhatsApp socket");
   if (sent?.key?.id && sent?.message) {
