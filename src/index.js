@@ -421,6 +421,40 @@ app.get("/api/whatsapp", (_req, res) => {
   res.send(html);
 });
 
+// ─── Scrape Proxy (Used by Laravel for tracking) ─────────────────
+import axios from "axios";
+
+app.post("/api/scrape", async (req, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+      },
+      timeout: 15000, // 15 seconds timeout
+    });
+
+    res.json({
+      success: true,
+      status: response.status,
+      html: response.data,
+    });
+  } catch (error) {
+    console.error(`[SCRAPE ERROR] Failed to fetch ${url}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      html: error.response ? error.response.data : null,
+    });
+  }
+});
+
 // ─── Self Keep-Alive (prevents Render free tier sleep) ───────────
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
 if (SELF_URL) {
