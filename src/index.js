@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import axios from "axios";
 import {
   state,
   sendMessage,
@@ -422,7 +423,6 @@ app.get("/api/whatsapp", (_req, res) => {
 });
 
 // ─── Scrape Proxy (Used by Laravel for tracking) ─────────────────
-import axios from "axios";
 
 app.post("/api/scrape", async (req, res) => {
   const { url } = req.body;
